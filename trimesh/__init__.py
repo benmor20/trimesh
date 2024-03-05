@@ -40,6 +40,12 @@ from . import (
     util,
 )
 
+# viewer
+from .viewer.trackball import Trackball
+
+# camera
+from .scene.cameras import Camera
+
 # geometry objects
 from .base import Trimesh
 
@@ -117,4 +123,6 @@ __all__ = [
     "utilScene",
     "voxel",
     "exceptions",
+    "Trackball",
+    "Camera",
 ]

@@ -354,9 +354,27 @@ def windings_aligned(triangles, normals_compare):
     return aligned
 
 
+def triangle_bounding_boxes(triangles):
+    """
+    Given a list of triangles, find the bounding box for each to
+    pass to rtree
+
+    Parameters
+    ----------
+    triangles (n, 3, 3) float
+      Triangles in space
+
+    Returns
+    -------
+    bounds : (n, 6)
+      interleaved bounding box for every triangle
+    """
+    return np.column_stack((triangles.min(axis=1), triangles.max(axis=1)))
+
+
 def bounds_tree(triangles):
     """
-    Given a list of triangles, create an r-tree for broad- phase
+    Given a list of triangles, create an r-tree for broad-phase
     collision detection
 
     Parameters
@@ -374,7 +392,7 @@ def bounds_tree(triangles):
         raise ValueError("Triangles must be (n, 3, 3)!")
 
     # the (n,6) interleaved bounding box for every triangle
-    triangle_bounds = np.column_stack((triangles.min(axis=1), triangles.max(axis=1)))
+    triangle_bounds = triangle_bounding_boxes(triangles)
     tree = util.bounds_tree(triangle_bounds)
     return tree
 

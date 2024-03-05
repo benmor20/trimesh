@@ -52,6 +52,7 @@ class RayMeshIntersector:
         locations : (h, 3) float
           [optional] Position of intersection in space
         """
+        print('Start ray_triangle_id')
         (index_tri, index_ray, locations) = ray_triangle_id(
             triangles=self.mesh.triangles,
             ray_origins=ray_origins,
@@ -60,6 +61,7 @@ class RayMeshIntersector:
             multiple_hits=multiple_hits,
             triangles_normal=self.mesh.face_normals,
         )
+        print('Done ray_triangle_id')
         if return_locations:
             if len(index_tri) == 0:
                 return index_tri, index_ray, locations
@@ -115,7 +117,7 @@ class RayMeshIntersector:
         triangle_index : (n,) int
           Index of triangle ray hit, or -1 if not hit
         """
-
+        print('Starts intersects first')
         (index_tri, index_ray) = self.intersects_id(
             ray_origins=ray_origins,
             ray_directions=ray_directions,
@@ -123,6 +125,7 @@ class RayMeshIntersector:
             multiple_hits=False,
             **kwargs,
         )
+        print('Done intersects_id')
 
         # put the result into the form of "one triangle index per ray"
         result = np.ones(len(ray_origins), dtype=np.int64) * -1
@@ -221,6 +224,7 @@ def ray_triangle_id(
     ray_candidates, ray_id = ray_triangle_candidates(
         ray_origins=ray_origins, ray_directions=ray_directions, tree=tree
     )
+    print('Part 1')
 
     # get subsets which are corresponding rays and triangles
     # (c,3,3) triangle candidates
@@ -237,6 +241,7 @@ def ray_triangle_id(
             raise ValueError("Invalid triangles!")
     else:
         plane_normals = triangles_normal[ray_candidates]
+    print('Part 2')
 
     # find the intersection location of the rays with the planes
     location, valid = intersections.planes_lines(
@@ -259,6 +264,7 @@ def ray_triangle_id(
     barycentric = triangles_mod.points_to_barycentric(
         triangle_candidates[valid], location
     )
+    print('Part 3')
 
     # the plane intersection is inside the triangle if all barycentric
     # coordinates are between 0.0 and 1.0
@@ -275,6 +281,7 @@ def ray_triangle_id(
     index_ray = ray_id[valid][hit]
     # locations are already valid plane intersections, just mask by hits
     location = location[hit]
+    print('Part 4')
 
     # only return points that are forward from the origin
     vector = location - ray_origins[index_ray]
@@ -288,6 +295,7 @@ def ray_triangle_id(
 
     if multiple_hits:
         return index_tri, index_ray, location
+    print('Part 5')
 
     # since we are not returning multiple hits, we need to
     # figure out which hit is first
