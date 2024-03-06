@@ -141,9 +141,6 @@ class Trimesh(Geometry3D):
         self._cache = caching.Cache(id_function=self._data.__hash__, force_immutable=True)
         self._cache.update(initial_cache)
 
-        self._face_to_rtree_index = None
-        self._rtree_index_to_face = None
-        self._reset_rtree_cache = True
         # check for None only to avoid warning messages in subclasses
         if vertices is not None:
             # (n, 3) float, set of vertices
@@ -181,11 +178,6 @@ class Trimesh(Geometry3D):
             # On first query expensive bookkeeping is done (creation of r-tree),
             # and is cached for subsequent queries
             self.ray = ray.ray_triangle.RayMeshIntersector(self)
-
-        # Caching for the triangles tree
-        # Not using normal caching to prevent recalculation when update_faces is used
-        self._triangles_tree = None
-        self._made_triangles_tree = False
 
         # a quick way to get permuted versions of the current mesh
         self.permutate = permutate.Permutator(self)
@@ -322,11 +314,7 @@ class Trimesh(Geometry3D):
         values : (n, 3) int64
           Indexes of self.vertices
         """
-        print('Faces updated')
         if values is None or len(values) == 0:
-            self._made_triangles_tree = False
-            self._face_to_rtree_index = None
-            self._rtree_index_to_face = None
             return self._data.data.pop("faces", None)
         if not (isinstance(values, np.ndarray) and values.dtype == int64):
             values = np.asanyarray(values, dtype=int64)
@@ -336,12 +324,6 @@ class Trimesh(Geometry3D):
             log.info("triangulating faces")
             values = geometry.triangulate_quads(values)
         self._data["faces"] = values
-
-        # reset rtree cached values if needed
-        if self._reset_rtree_cache:
-            self._face_to_rtree_index = np.arange(len(values))
-            self._rtree_index_to_face = self._face_to_rtree_index.copy()
-            self._made_triangles_tree = False
 
     @caching.cache_decorator
     def faces_sparse(self) -> coo_matrix:
@@ -477,9 +459,6 @@ class Trimesh(Geometry3D):
         values : (n, 3) float
           Points in space
         """
-        print('Vertices updated')
-        if self._reset_rtree_cache:
-            self._made_triangles_tree = False
         if values is None or len(values) == 0:
             return self._data.data.pop("vertices", None)
         self._data["vertices"] = np.asanyarray(values, order="C", dtype=float64)
@@ -864,20 +843,6 @@ class Trimesh(Geometry3D):
         return self.vertices.view(np.ndarray)[self.faces]
 
     @caching.cache_decorator
-    def triangle_bounds(self):
-        """
-        Bounding boxes for the triangles in this mesh
-
-        Returns
-        -------
-        bounds: (n, 6) float
-            interleaved bounding box for every triangle
-        """
-        print('Setting bounds')
-        return triangles.triangle_bounding_boxes(self.triangles)
-
-    @property
-    # No longer caching so certain types of updates can be done w/o regenerating the tree
     def triangles_tree(self) -> Index:
         """
         An R-tree containing each face of the mesh.
@@ -887,11 +852,7 @@ class Trimesh(Geometry3D):
         tree : rtree.index
           Each triangle in self.faces has a rectangular cell
         """
-        if not self._made_triangles_tree:
-            print('Recalculating tree')
-            self._triangles_tree = triangles.bounds_tree(self.triangles)
-            self._made_triangles_tree = True
-        return self._triangles_tree
+        return triangles.bounds_tree(self.triangles)
 
     @caching.cache_decorator
     def triangles_center(self) -> NDArray[float64]:
@@ -1290,14 +1251,6 @@ class Trimesh(Geometry3D):
         if not util.is_shape(faces, (-1, 3)):
             faces = self._cache["faces"]
 
-        # Update rtree index
-        inv_mask = ~mask
-        idxs_to_remove = self._face_to_rtree_index[inv_mask]
-        boxes_to_remove = self.triangle_bounds[inv_mask, :]
-        for idx, box in zip(idxs_to_remove, boxes_to_remove):
-            self._triangles_tree.delete(idx, box)
-        self._face_to_rtree_index = self._face_to_rtree_index[mask]
-
         # apply to face_attributes
         count = len(self.faces)
         for key, value in self.face_attributes.items():
@@ -1311,11 +1264,7 @@ class Trimesh(Geometry3D):
             self.face_attributes[key] = value[mask]
 
         # actually apply the mask
-        self._reset_rtree_cache = False
         self.faces = faces[mask]
-        self._reset_rtree_cache = True
-        self._face_to_rtree_index = self._face_to_rtree_index[mask]
-        self._rtree_index_to_face -= np.cumsum(~mask)
 
         # apply to face colors
         self.visual.update_faces(mask)
@@ -1323,21 +1272,6 @@ class Trimesh(Geometry3D):
         # if our normals were the correct shape apply them
         if util.is_shape(cached_normals, (-1, 3)):
             self.face_normals = cached_normals[mask]
-
-    def get_actual_indices_from_rtree_indexes(self, rtree_indexes: ArrayLike) -> ArrayLike:
-        """
-        Find the indices to use in the mesh given the indices that rtree returns
-
-        Parameters
-        ----------
-        rtree_indexes
-            (n) int, the indices returned from rtree to convert into mesh indices
-
-        Returns
-        -------
-            (n) int, the indices to use with this mesh
-        """
-        return self._rtree_index_to_face[rtree_indexes]
 
     def remove_infinite_values(self) -> None:
         """
@@ -3170,7 +3104,6 @@ class Trimesh(Geometry3D):
         copied = Trimesh()
         # always deepcopy vertex and face data
         copied._data.data = copy.deepcopy(self._data.data)
-        copied.faces = copied._data["faces"]  # ensures face updates are done properly
         # copy visual information
         copied.visual = self.visual.copy()
         # get metadata

@@ -28,17 +28,17 @@ class ErasableTrimesh(trimesh.Trimesh):
         if len(args) == 1 and isinstance(args[0], trimesh.Trimesh):
             mesh: trimesh.Trimesh = args[0]
             super().__init__(
-                mesh.vertices,
-                mesh.faces,
-                mesh.face_normals,
-                mesh._cache["vertex_normals"],
+                vertices=mesh.vertices.copy(),
+                faces=mesh.faces.copy(),
+                visual=mesh.visual.copy()
             )
         else:
             super().__init__(*args, **kwargs)
+        self.ray = trimesh.ray.ray_triangle.RayMeshIntersector(self)
 
-    @faces.setter
+    @trimesh.Trimesh.faces.setter
     def faces(self, values):
-        super().faces = values
+        trimesh.Trimesh.faces.fset(self, values)
         if self._reset_rtree_cache:
             self._made_triangles_tree = False
             if values is None or len(values) == 0:
@@ -50,9 +50,9 @@ class ErasableTrimesh(trimesh.Trimesh):
                 self._rtree_to_mesh_index = self._mesh_to_rtree_index.copy()
                 self._valid_rtree_to_mesh_indices = np.ones(len(values), dtype=bool)
 
-    @vertices.setter
+    @trimesh.Trimesh.vertices.setter
     def vertices(self, values):
-        super().vertices = values
+        trimesh.Trimesh.vertices.fset(self, values)
         if self._reset_rtree_cache:
             self._made_triangles_tree = False
 
@@ -76,10 +76,6 @@ class ErasableTrimesh(trimesh.Trimesh):
         return self._triangles_tree
 
     def update_faces(self, mask: ArrayLike) -> None:
-        self._reset_rtree_cache = False
-        super().update_faces(mask)
-        self._reset_rtree_cache = True
-
         inv_mask = ~mask
         idxs_to_remove = self._mesh_to_rtree_index[inv_mask]
         boxes_to_remove = self.triangle_bounds[inv_mask, :]
@@ -88,6 +84,25 @@ class ErasableTrimesh(trimesh.Trimesh):
         self._mesh_to_rtree_index = self._mesh_to_rtree_index[mask]
         self._rtree_to_mesh_index[self._valid_rtree_to_mesh_indices] -= np.cumsum(inv_mask)
         self._valid_rtree_to_mesh_indices[self._valid_rtree_to_mesh_indices] = mask
+
+        self._reset_rtree_cache = False
+        super().update_faces(mask)
+        self._reset_rtree_cache = True
+
+    def get_actual_indices_from_rtree_indices(self, rtree_indices: ArrayLike) -> ArrayLike:
+        """
+        Get the mesh indices that correspond to rtree indices
+
+        Parameters
+        ----------
+        rtree_indexes: (n) int
+            the indices from this mesh's rtree Index to convert to mesh indices
+
+        Returns
+        -------
+            (n) int, the mesh indices corresponding to rtree indices
+        """
+        return self._rtree_to_mesh_index[rtree_indices]
 
 
 def find_vector_direction(x: int, y: int, scene: trimesh.scene.Scene):
@@ -109,8 +124,10 @@ def find_vector_direction(x: int, y: int, scene: trimesh.scene.Scene):
 def main():
     src = '2011HondaOdysseyScan1.glb'
     og_mesh: trimesh.Trimesh = trimesh.load(src, force='mesh')
+    # print(mesh.mutable)
     mesh = ErasableTrimesh(og_mesh)
     scene = trimesh.Scene(mesh)
+    mesh_name = next(iter(scene.geometry.keys()))
     res_x, res_y = 1280, 666
     fov_y = 45
     focal_len = res_y / 2.0 / np.tan(np.radians(fov_y) / 2.0)
@@ -143,7 +160,7 @@ def main():
         if is_e_held.val or is_d_held.val:
             origin = viewer.scene.camera_transform[:3, 3]
             drctn = find_vector_direction(x, y, viewer.scene)
-            scene_mesh: trimesh.Trimesh = viewer.scene.geometry['GLTF']
+            scene_mesh: ErasableTrimesh = viewer.scene.geometry[mesh_name]
             print('Casting')
             tri_idx = scene_mesh.ray.intersects_first(origin.reshape((1, 3)), drctn.reshape((1, 3)))[0]
 
