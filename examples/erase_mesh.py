@@ -1,5 +1,8 @@
 import pyglet.app
+from numpy._typing import ArrayLike
 from pyglet.window import key
+from rtree import Index
+
 import trimesh
 import numpy as np
 
@@ -12,6 +15,79 @@ class BoolWrapper:
 class IntWrapper:
     def __init__(self):
         self.val = 0
+
+
+class ErasableTrimesh(trimesh.Trimesh):
+    def __init__(self, *args, **kwargs):
+        self._triangles_tree = None
+        self._made_triangles_tree = False
+        self._mesh_to_rtree_index = None
+        self._rtree_to_mesh_index = None
+        self._valid_rtree_to_mesh_indices = None
+        self._reset_rtree_cache = True
+        if len(args) == 1 and isinstance(args[0], trimesh.Trimesh):
+            mesh: trimesh.Trimesh = args[0]
+            super().__init__(
+                mesh.vertices,
+                mesh.faces,
+                mesh.face_normals,
+                mesh._cache["vertex_normals"],
+            )
+        else:
+            super().__init__(*args, **kwargs)
+
+    @faces.setter
+    def faces(self, values):
+        super().faces = values
+        if self._reset_rtree_cache:
+            self._made_triangles_tree = False
+            if values is None or len(values) == 0:
+                self._mesh_to_rtree_index = None
+                self._rtree_to_mesh_index = None
+                self._valid_rtree_to_mesh_indices = None
+            else:
+                self._mesh_to_rtree_index = np.arange(len(values))
+                self._rtree_to_mesh_index = self._mesh_to_rtree_index.copy()
+                self._valid_rtree_to_mesh_indices = np.ones(len(values), dtype=bool)
+
+    @vertices.setter
+    def vertices(self, values):
+        super().vertices = values
+        if self._reset_rtree_cache:
+            self._made_triangles_tree = False
+
+    @trimesh.caching.cache_decorator
+    def triangle_bounds(self):
+        """
+        Bounding boxes for the triangles in this mesh
+        Returns
+        -------
+        bounds: (n, 6) float
+            interleaved bounding box for every triangle
+        """
+        return trimesh.triangles.triangle_bounding_boxes(self.triangles)
+
+    @property
+    def triangles_tree(self) -> Index:
+        if not self._made_triangles_tree:
+            print('Recalculating tree')
+            self._triangles_tree = trimesh.triangles.bounds_tree(self.triangles)
+            self._made_triangles_tree = True
+        return self._triangles_tree
+
+    def update_faces(self, mask: ArrayLike) -> None:
+        self._reset_rtree_cache = False
+        super().update_faces(mask)
+        self._reset_rtree_cache = True
+
+        inv_mask = ~mask
+        idxs_to_remove = self._mesh_to_rtree_index[inv_mask]
+        boxes_to_remove = self.triangle_bounds[inv_mask, :]
+        for idx, box in zip(idxs_to_remove, boxes_to_remove):
+            self._triangles_tree.delete(idx, box)
+        self._mesh_to_rtree_index = self._mesh_to_rtree_index[mask]
+        self._rtree_to_mesh_index[self._valid_rtree_to_mesh_indices] -= np.cumsum(inv_mask)
+        self._valid_rtree_to_mesh_indices[self._valid_rtree_to_mesh_indices] = mask
 
 
 def find_vector_direction(x: int, y: int, scene: trimesh.scene.Scene):
@@ -32,7 +108,8 @@ def find_vector_direction(x: int, y: int, scene: trimesh.scene.Scene):
 
 def main():
     src = '2011HondaOdysseyScan1.glb'
-    mesh: trimesh.primitives.Trimesh = trimesh.load(src, force='mesh')
+    og_mesh: trimesh.Trimesh = trimesh.load(src, force='mesh')
+    mesh = ErasableTrimesh(og_mesh)
     scene = trimesh.Scene(mesh)
     res_x, res_y = 1280, 666
     fov_y = 45
