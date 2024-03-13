@@ -17,6 +17,11 @@ class IntWrapper:
         self.val = 0
 
 
+class ArrayWrapper:
+    def __init__(self):
+        self.val: np.ndarray | None = None
+
+
 class ErasableTrimesh(trimesh.Trimesh):
     def __init__(self, *args, **kwargs):
         self._triangles_tree = None
@@ -121,6 +126,26 @@ def find_vector_direction(x: int, y: int, scene: trimesh.scene.Scene):
     return drctns[row, :]
 
 
+def pixel_offsets(radius: int, pixel_every_n: int) -> np.ndarray:
+    """
+    Calculate the pixel offsets given an eraser radius and how often pixels should appear
+
+    :param radius: an int, how many pixels from the center the eraser tool can be
+    :param pixel_every_n: an int, how often pixels should appear within the radius
+    :return: an (n, 2) int array, where each x-y coordinate is within (radius) of (0, 0)
+        and each coord mod (pixel_every_n) == 0
+    """
+    possible_vals = np.arange(-radius, radius + 1)
+    xcoords, ycoords = np.meshgrid(possible_vals, possible_vals)
+    xcoords = xcoords.flatten()
+    ycoords = ycoords.flatten()
+    pixels = np.stack((xcoords, ycoords)).T
+    rows = (xcoords ** 2 + ycoords ** 2 <= radius ** 2)\
+        & (xcoords % pixel_every_n == 0)\
+        & (ycoords % pixel_every_n == 0)
+    return pixels[rows, :]
+
+
 def main():
     src = '2011HondaOdysseyScan1.glb'
     og_mesh: trimesh.Trimesh = trimesh.load(src, force='mesh')
@@ -136,12 +161,15 @@ def main():
     viewer = scene.show(start_loop=False, callback=lambda s: None)
     is_e_held = BoolWrapper()
     is_d_held = BoolWrapper()
+    tris_to_erase = ArrayWrapper()
+    offsets = pixel_offsets(2, 2)
 
     @viewer.event
     def on_key_press(symbol, modifiers):
         if symbol == key.E:
             print('E pressed')
             is_e_held.val = True
+            tris_to_erase.val = np.ones(viewer.scene.geometry[mesh_name].faces.shape[0], dtype=bool)
         elif symbol == key.D:
             print('D pressed')
             is_d_held.val = True
@@ -149,8 +177,10 @@ def main():
     @viewer.event
     def on_key_release(symbol, modifiers):
         if symbol == key.E:
-            print('E released')
+            print('E release start')
             is_e_held.val = False
+            viewer.scene.geometry[mesh_name].update_faces(tris_to_erase.val)
+            print('E released')
         elif symbol == key.D:
             print('D released')
             is_d_held.val = False
@@ -158,20 +188,24 @@ def main():
     @viewer.event
     def on_mouse_motion(x, y, dx, dy):
         if is_e_held.val or is_d_held.val:
-            origin = viewer.scene.camera_transform[:3, 3]
-            drctn = find_vector_direction(x, y, viewer.scene)
+            origins, drctns, pixels = scene.camera_rays()
+            coords = np.array([x, y]) + offsets
+            rows = np.any(np.all(pixels[:, None] == coords, axis=-1), axis=-1)
             scene_mesh: ErasableTrimesh = viewer.scene.geometry[mesh_name]
+            origins = origins[rows, :]
+            drctns = drctns[rows, :]
             print('Casting')
-            tri_idx = scene_mesh.ray.intersects_first(origin.reshape((1, 3)), drctn.reshape((1, 3)))[0]
+            tri_idxs = scene_mesh.ray.intersects_first(origins, drctns)
+            print('Done')
+            visible_idxs = np.sum(scene_mesh.face_normals[tri_idxs, :] * drctns, axis=1) < 0
+            tri_idxs = tri_idxs[visible_idxs]
 
             if is_e_held.val:
-                face_mask = np.ones(scene_mesh.faces.shape[0], dtype=bool)
-                face_mask[tri_idx] = False
-                scene_mesh.update_faces(face_mask)
+                tris_to_erase.val[tri_idxs] = False
             elif is_d_held.val:
                 print('Drawing')
-                endpoint = scene_mesh.triangles_center[tri_idx, :]
-                ray = trimesh.load_path(np.array([origin, endpoint]))
+                endpoints = scene_mesh.triangles_center[tri_idxs, :]
+                ray = trimesh.load_path(np.array([origins[rows, :], endpoints]))
                 viewer.scene.add_geometry(ray)
 
     pyglet.app.run()
